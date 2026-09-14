@@ -1,0 +1,44 @@
+# Python bytecode and build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments and local secrets
+.venv/
+venv/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model weights (large; download separately into models/)
+/models/
+*.pth
+*.pt
+*.safetensors
+*.ckpt
+*.onnx
+
+# Datasets downloaded by the tutorial notebooks
+*.zip
+test/data/
+
+# Models saved by the training / fine-tuning notebooks
+test/cnn3_models/
+test/userdefined_cnn_models/
+test/finetuned_models/
+
+# Pipeline outputs (tailor.measure)
+/output/
+/output_*/
+test/output/
+test/output_*/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

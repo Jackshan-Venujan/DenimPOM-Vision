@@ -56,8 +56,8 @@ dependencies = [
     "tqdm>=4.67.1",
     "pandas>=2.2.2",
     "numpy>=2.0.0,<3.0.0",
-    "torch>=2.7.0",
-    "torchvision>=0.22.0",
+    "torch==2.7.0",
+    "torchvision==0.22.0",
     "scikit-learn>=1.6.1",
     "Pillow>=11.1.0",
     "matplotlib>=3.10.0",
@@ -110,3 +110,12 @@ target-version = ["py311"]
 [tool.pytest.ini_options]
 testpaths = ["test"]
 addopts = "--nbmake"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
