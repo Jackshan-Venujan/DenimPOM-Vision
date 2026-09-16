@@ -28,6 +28,7 @@ from . import classification
 from . import segmentation
 from . import landmark
 from . import matting
+from . import calibration
 
 
 def __getattr__(name):

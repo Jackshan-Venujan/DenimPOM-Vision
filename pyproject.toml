@@ -67,7 +67,10 @@ dependencies = [
     "einops>=0.8.1",
     "safetensors>=0.7.0",
     "shapely>=2.1.1",
-    "opencv-python>=4.11.0.86"
+    # 5.0 or newer: cv2.aruco, which garmentiq.calibration needs, moved out of
+    # contrib into the main package in OpenCV 5. On 4.x it is contrib-only, so a 4.x
+    # resolution would import cleanly and then fail on cv2.aruco.
+    "opencv-python>=5.0.0"
 ]
 
 [project.optional-dependencies]

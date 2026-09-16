@@ -712,3 +712,76 @@ existing landmarks
     -> derived landmark if necessary
     -> retrained landmark model only as a last resort
 ```
+
+
+
+
+
+Ready for review
+Select text to add comments on the plan
+src/garmentiq/calibration/ — ArUco pixel → mm metrology
+Context
+The AI pipeline (classification → segmentation → landmarks) produces pixel coordinates. Nothing converts them to millimetres, so there is no QC verdict possible against a ±3 mm tolerance. A single mm-per-pixel ratio is not good enough: perspective makes a 50 mm marker span a different number of pixels at the centre of the frame than at the corner, and a phone lens bends straight lines exactly where a 1200 mm garment reaches.
+
+This adds a metrology layer that runs beside the AI pipeline and does not change it. The garment lies on a printed ArUco board; every capture detects whatever markers are not occluded, fits a robust planar homography from their corners to their known millimetre positions, and transforms POM pixel points through it. The AI pipeline keeps producing pixels; calibration turns them into millimetres.
+
+src/garmentiq/calibration/ exists but is empty. Written fresh from the pipeline diagram, one concern per file so each can be tested and debugged on its own.
+
+Mode: board in every shot. Each frame computes its own homography, so the camera or table may move between captures. Camera intrinsics are the only thing calibrated once and saved.
+
+Not in scope: wiring this into realtime_measure.py or tailor.py. That is the next step, once the numbers check out.
+
+Architecture
+frame ──► undistort.py ──► detect.py ──► homography.py ──► surface.py ──► metric.py ──► mm
+              ▲                │              ▲                 ▲
+         camera.py        board.py       board.py          camera.py
+       (saved once)   (board_config.py)                  (surface offset)
+Files
+Each module is importable and testable alone. All follow the package conventions: # garmentiq/calibration/<file>.py first line, gerund one-line module docstring, Google-style Args:/Raises:/Returns:, plain ValueError/FileNotFoundError with f-strings, cv2 + numpy only.
+
+File	Responsibility
+board.py	BoardSpec dataclass: the physical layout. Builds every marker's 4 corner positions in mm from a regular grid (rows, cols, marker_size_mm, pitch_x_mm, pitch_y_mm, ids row-by-row), or from an explicit {id: (x_mm, y_mm)} map for an irregular board. corners_mm(id) returns (4,2) in OpenCV order TL,TR,BR,BL. to_dict/from_dict/save_json/load_json.
+board_config.py	The FILL_THE_DATA file. Every value a FILL_THE_DATA sentinel with a comment saying exactly how to measure it. load_board() returns a BoardSpec and raises a clear error naming any field still unfilled.
+detect.py	create_detector(dictionary) with CORNER_REFINE_SUBPIX (sub-pixel accuracy is what buys the ±3 mm), detect_markers(image, ...) -> {id: (4,2) corners}. Rejects duplicate IDs (two boards in view).
+camera.py	CameraIntrinsics dataclass (camera_matrix, dist_coeffs, image_size, rms_px). calibrate_camera(detections, board) via cv2.calibrateCameraExtended, dropping views that are the wrong resolution, show too few markers, or reproject worst above ~3× the median. Reports per-view RMS and frame-coverage so a bad capture set is obvious. save_json/load_json.
+undistort.py	undistort_image(image, intrinsics) and undistort_points(points_px, intrinsics), both keeping the same pixel frame (same K) so the homography stays valid. Identity pass-through when intrinsics are None — the pipeline runs without lens calibration, just less accurately.
+homography.py	estimate_homography(corners_px, board) — stacks every corner of every detected marker into correspondences and fits with cv2.findHomography(..., RANSAC); direct solve when exactly 4 points. Guards: fewer than 2 markers, near-collinear points, degenerate/non-finite H. homography_residuals(...) returns per-corner mm error, rmse_mm, max_mm — the primary health check.
+surface.py	lift_to_surface(H, intrinsics, offset_mm). The board plane is the table; landmarks sit on top of the fabric. At ~1170 mm camera height a 5 mm lift is a ~0.43 % scale error ≈ 4.3 mm over a 1 m leg — larger than the whole tolerance, so this is not optional. Decomposes H with K into the plane pose, rebuilds it at z = offset. No-op without intrinsics.
+metric.py	pixel_to_mm(points_px, H) (cv2.perspectiveTransform), distance_mm(a, b), local_mm_per_px(points_px, H) from the local homography Jacobian — reports the scale at each POM and flags points in a badly-conditioned region.
+calibrate.py	The façade the rest of the app calls: calibrate_frame(image, board, intrinsics=None, surface_offset_mm=0.0) -> FrameCalibration. Runs undistort → detect → homography → lift, and returns H plus diagnostics (marker_ids, rmse_mm, max_mm, n_markers). FrameCalibration.to_mm(points) and .distance(a, b) are the two calls a caller needs.
+plot.py	draw_markers(image, corners, ...) outlines and labels every detected marker (red dot on corner 0 so a rotated print is visible at a glance); draw_mm_grid(image, H, ...) back-projects a 100 mm grid onto the photo — if that grid does not sit square on the board, the calibration is wrong and you can see it.
+inspect_board.py	Diagnostic, run before filling the config. python -m garmentiq.calibration.inspect_board <photo>: sweeps every predefined ArUco dictionary and reports which one matches, prints the detected IDs arranged in their visual row/column order, estimates marker_size-relative pitch, and writes an annotated overlay. Prints a ready-to-paste board_config.py block.
+capture.py	python -m garmentiq.calibration.capture: opens the phone stream (reuses the LatestFrameReader pattern from realtime_measure.py), live-previews marker detection, s saves a frame to calibration_samples/, and tracks which image regions still lack marker coverage so you know when you have enough tilted views for camera.py.
+__init__.py	Path comment, prose docstring, flat from .x import y re-exports, matching segmentation/__init__.py. Plus from . import calibration added to src/garmentiq/init.py (cv2+numpy only, cheap to import eagerly).
+The data you must fill in
+board_config.py ships with these as FILL_THE_DATA, each with a measuring instruction in a comment. inspect_board.py gives you a first estimate for the starred ones; verify against the print with a caliper — a photo cannot reveal printer scaling, since everything scales together.
+
+Field	How to get it
+ARUCO_DICTIONARY *	inspect_board.py sweeps and tells you (DICT_4X4_50, DICT_5X5_100, …).
+MARKER_IDS *	The ID grid, row by row, e.g. [[0,1,2],[3,4,5]]. inspect_board.py prints it in visual order.
+MARKER_SIZE_MM	Caliper across one printed black square including its black border. The nominal 50 mm is usually off by a few tenths — e.g. 50.1.
+PITCH_X_MM, PITCH_Y_MM *	Left edge of one marker to the left edge of the next in the same row / column. (board.py also accepts a clear-gap value and adds the marker size for you.)
+ROWS, COLS	Count on the print.
+BOARD_WIDTH_MM, BOARD_HEIGHT_MM	Optional; used as a sanity cross-check against rows × pitch.
+CAMERA_RESOLUTION	Full-res capture size, e.g. (4606, 3456). Intrinsics are only valid at the resolution they were made at.
+CAMERA_TO_BOARD_MM	Tape measure, lens to table (~1170 mm on your rig). Used for a sanity check and to predict achievable accuracy.
+SURFACE_OFFSET_MM	Fabric thickness — how far the garment top sits above the board. ~5 mm for denim. Directly scales every measurement (see surface.py).
+Your new photo shows a grid rather than the four-corner sheet, and I can't count IDs from it reliably — which is why board.py supports both a regular grid and an explicit ID→position map, and inspect_board.py resolves it from a real photo.
+
+Verification
+test/test_calibration.py, pure geometry with synthetic data — no camera, no models, no network, runs in seconds. One test class per module so each is debuggable alone (pytest test/test_calibration.py::TestHomography):
+
+board.py — grid generation reproduces hand-computed corners; explicit-map and grid forms agree; JSON round-trips.
+detect.py — render a synthetic board with cv2.aruco.generateImageMarker, warp it by a known perspective, detect, and confirm IDs and corner order.
+homography.py — build correspondences through a known H, fit, and require recovery to < 0.01 mm. Then corrupt one marker's corners and confirm RANSAC rejects it and rmse_mm stays small. Assert the guards raise on 1 marker / collinear points.
+surface.py — a synthetic camera at 1170 mm: confirm a 5 mm lift changes distances by the predicted 0.43 %, and that the no-intrinsics path is an exact no-op.
+metric.py — a pure similarity H gives exact known distances; local_mm_per_px matches the analytic scale.
+calibrate.py — end-to-end on a synthetic rendered board: known 300 mm segment recovers to < 0.5 mm.
+Then on real hardware, in order:
+
+python -m garmentiq.calibration.inspect_board <board photo> → dictionary, ID grid, overlay. Fill board_config.py, verify the marker size with a caliper.
+python -m garmentiq.calibration.capture → 20–40 tilted views; calibrate_camera should report RMS < 1 px and > 70 % coverage.
+Photograph the bare board flat, run calibrate_frame, check rmse_mm is well under 1 mm and that draw_mm_grid lays a square grid on the board.
+Ground truth: put a steel rule on the board, measure a known 500 mm span through FrameCalibration.distance, and confirm the error is inside ±3 mm at several positions — centre, edge and corner of the frame, which is where perspective and distortion bite hardest.
+Dependency risk to fix
+pyproject.toml pins opencv-python>=4.11.0.86. Your venv resolved OpenCV 5.0.0, where cv2.aruco moved out of contrib and is available — but that floor still permits a 4.x resolution, where cv2.aruco is contrib-only and this whole subpackage fails at import. I will raise the floor to opencv-python>=5.0.0 and add a hasattr(cv2, "aruco") guard in detect.py that raises an actionable message.

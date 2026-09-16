@@ -115,7 +115,7 @@ def _build_prompt(prompt: Optional[dict], kwargs: dict):
 
 def extract(
     model: torch.nn.Module,
-    image_path: str,
+    image_path: Union[str, np.ndarray],
     processor=None,
     prompt: Optional[dict] = None,
     device: Union[str, torch.device] = "cpu",
@@ -192,7 +192,11 @@ def extract(
     """
     device = resolve_device(device)
     model = model.to(device)
-    image = Image.open(image_path).convert("RGB")
+    # Accept a file path, or an RGB numpy array such as a camera frame
+    if isinstance(image_path, np.ndarray):
+        image = Image.fromarray(image_path).convert("RGB")
+    else:
+        image = Image.open(image_path).convert("RGB")
 
     # Processor-Based Models (SAM 1 / SAM 2 / SAM 3)
     if processor is not None:
