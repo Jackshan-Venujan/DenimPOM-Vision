@@ -1,95 +1,81 @@
 # garmentiq/calibration/undistort.py
-"""Removing lens distortion while staying in the same pixel frame.
+"""Removing lens distortion, using the result of Step A.
 
-A homography assumes a perfect pinhole camera. A phone lens bends straight lines,
-most strongly toward the image edges — which is exactly where a 1200 mm garment
-reaches — so distortion is removed before anything is converted to millimetres.
+The undistortion maps are built once, so correcting each frame is a single fast
+`cv2.remap`. The corrected image keeps the same camera matrix K, so it has the same
+size and scale as the raw frame; only the bending of straight lines is removed.
 
-Both helpers keep the original camera matrix, so undistorted points stay in the same
-pixel coordinate system as the raw image and a homography fitted on one works on the
-other. With no intrinsics they pass their input straight through, so the whole
-pipeline still runs before the lens has been calibrated; it is just less accurate.
+Run on its own to compare raw and corrected frames side by side::
+
+    python -m garmentiq.calibration.undistort
 """
 import cv2
 import numpy as np
 
-from .metric import as_points
+from garmentiq.calibration.camera import Camera, check_frame_size, open_window, put_text
+from garmentiq.calibration.config import INTRINSICS_PATH
 
 
-def undistort_points(points_px, intrinsics):
-    """Removes lens distortion from pixel points.
+class Undistorter:
+    """Undistorts frames and pixel points for one calibrated camera."""
 
-    Args:
-        points_px (array-like): (N, 2) raw image points.
-        intrinsics (CameraIntrinsics | None): Calibrated lens, or None for a no-op.
-
-    Returns:
-        numpy.ndarray: (N, 2) float64 undistorted points, in the same pixel frame.
-    """
-    points = as_points(points_px)
-    if intrinsics is None or not np.any(intrinsics.dist_coeffs):
-        return points.copy()
-
-    K = intrinsics.camera_matrix
-    dist = intrinsics.dist_coeffs
-    undistorted = cv2.undistortPoints(points.reshape(-1, 1, 2), K, dist, None, None, K)
-    undistorted = undistorted.reshape(-1, 2).astype(np.float64)
-
-    # cv2.undistortPoints inverts the distortion with a fixed, small number of
-    # iterations, which leaves a visible residual at the frame edges. Polish it until
-    # re-distorting the answer reproduces the input to well below a pixel.
-    no_rotation = np.zeros(3)
-    focal = np.array([K[0, 0], K[1, 1]])
-    centre = K[:2, 2]
-    for _ in range(50):
-        normalized = np.column_stack(
-            [(undistorted - centre) / focal, np.ones(len(undistorted))]
+    def __init__(self, intrinsics_path=INTRINSICS_PATH):
+        if not intrinsics_path.exists():
+            raise FileNotFoundError(
+                f"{intrinsics_path} not found. Run capture_lens, then calibrate_lens."
+            )
+        data = np.load(intrinsics_path)
+        self.K = data["K"]
+        self.dist = data["dist"]
+        self.image_size = tuple(int(value) for value in data["image_size"])
+        self.map_x, self.map_y = cv2.initUndistortRectifyMap(
+            self.K, self.dist, None, self.K, self.image_size, cv2.CV_32FC1
         )
-        redistorted = cv2.projectPoints(normalized, no_rotation, no_rotation, K, dist)[0]
-        correction = points - redistorted.reshape(-1, 2)
-        undistorted = undistorted + correction
-        if np.max(np.abs(correction)) < 1e-9:
-            break
-    return undistorted
+
+    def apply(self, frame):
+        """Returns the undistorted frame.
+
+        Raises:
+            ValueError: If the frame is not the size the lens was calibrated at.
+        """
+        check_frame_size(frame, self.image_size, what="the lens calibration")
+        return cv2.remap(frame, self.map_x, self.map_y, cv2.INTER_LINEAR)
+
+    def points(self, pixel_points):
+        """Moves points from the raw frame to where they are in the undistorted frame.
+
+        Args:
+            pixel_points: (x, y) pairs from the raw camera frame.
+
+        Returns:
+            numpy.ndarray: (N, 2) positions in the undistorted frame.
+        """
+        points = np.asarray(pixel_points, dtype=np.float64).reshape(-1, 1, 2)
+        return cv2.undistortPoints(points, self.K, self.dist, P=self.K).reshape(-1, 2)
 
 
-def undistort_marker_corners(corners_px, intrinsics):
-    """Applies `undistort_points` to a {marker id: (4, 2)} dictionary."""
-    if intrinsics is None:
-        return {int(i): np.asarray(c, dtype=np.float64) for i, c in corners_px.items()}
-    return {
-        int(marker_id): undistort_points(corners, intrinsics)
-        for marker_id, corners in corners_px.items()
-    }
+def main():
+    undistorter = Undistorter()
+    print("K =\n", undistorter.K)
+    print("dist =", undistorter.dist)
+
+    window = "Raw (left) vs undistorted (right) - q to quit"
+    open_window(window)
+    cv2.resizeWindow(window, undistorter.image_size[0] * 2, undistorter.image_size[1])
+
+    with Camera() as camera:
+        while True:
+            raw = camera.read()
+            corrected = undistorter.apply(raw)
+            put_text(raw, "Raw")
+            put_text(corrected, "Undistorted")
+            cv2.imshow(window, np.hstack([raw, corrected]))
+
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+    cv2.destroyAllWindows()
 
 
-def undistort_image(image, intrinsics):
-    """Removes lens distortion from a whole image, keeping the same camera matrix.
-
-    Straightening the image is only needed for display and for detecting markers on
-    an already-undistorted frame; measuring undistorts the handful of points it needs,
-    which is far cheaper and avoids a resampling step.
-
-    Args:
-        image (numpy.ndarray): BGR or grayscale image.
-        intrinsics (CameraIntrinsics | None): Calibrated lens, or None for a no-op.
-
-    Returns:
-        numpy.ndarray: Undistorted image of the same size.
-
-    Raises:
-        ValueError: If the image size differs from the one the lens was calibrated at,
-            because intrinsics are only valid at their own resolution.
-    """
-    if intrinsics is None or not np.any(intrinsics.dist_coeffs):
-        return image.copy()
-
-    height, width = image.shape[:2]
-    if (width, height) != tuple(intrinsics.image_size):
-        raise ValueError(
-            f"Image is {width}x{height} but the lens was calibrated at "
-            f"{intrinsics.image_size[0]}x{intrinsics.image_size[1]}. Intrinsics are "
-            f"only valid at their own resolution; recalibrate, or capture at the "
-            f"calibrated size."
-        )
-    return cv2.undistort(image, intrinsics.camera_matrix, intrinsics.dist_coeffs)
+if __name__ == "__main__":
+    main()
