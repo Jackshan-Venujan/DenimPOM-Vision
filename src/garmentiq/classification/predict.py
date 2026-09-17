@@ -1,4 +1,5 @@
 """Single-image garment classification."""
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,7 +11,7 @@ from garmentiq.utils.device import resolve_device, empty_cache
 
 def predict(
     model: Type[nn.Module],
-    image_path: str,
+    image_path: Union[str, np.ndarray],
     classes: List[str],
     resize_dim=(120, 184),
     normalize_mean=[0.8047, 0.7808, 0.7769],
@@ -54,8 +55,8 @@ def predict(
     """
     device = resolve_device(device)
 
-    # Validate image extension
-    if not any(
+    # Validate image extension (only for file paths; arrays such as camera frames skip this)
+    if isinstance(image_path, str) and not any(
         image_path.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".JPG"]
     ):
         raise ValueError("Image file must end with .jpg, .jpeg, .png, or .JPG")
@@ -72,8 +73,11 @@ def predict(
         ]
     )
 
-    # Load and preprocess the image
-    image = Image.open(image_path).convert("RGB")
+    # Load and preprocess the image (a file path, or an RGB numpy array such as a camera frame)
+    if isinstance(image_path, np.ndarray):
+        image = Image.fromarray(image_path).convert("RGB")
+    else:
+        image = Image.open(image_path).convert("RGB")
     model = model.to(device)
     image_tensor = transform(image).unsqueeze(0).to(device)  # add batch dimension
 
