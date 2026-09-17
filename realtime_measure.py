@@ -1,22 +1,33 @@
-"""Real-time trouser measurement from a phone camera stream.
+"""Real-time trouser measurement from a phone camera stream, in millimetres.
 
 The live view classifies every frame, so you can see what the camera thinks it is
 looking at. Pressing 's' freezes that frame and runs segmentation only, then puts
 the garment on a bright green background and shows it in a review window. From
 there you confirm, and the slow stages run on the green image: landmark detection
--> refinement -> derivation -> pixel measurements. Nothing is saved until you accept.
+-> refinement -> derivation -> pixel measurements -> millimetres. Nothing is saved
+until you accept.
+
+Millimetres come from the chessboard calibration in garmentiq.calibration (see
+src/garmentiq/calibration/calibration.md). Every frame is undistorted with the lens
+calibration, and the two end landmarks of each measurement are mapped onto the table
+with the table homography. For the numbers to be right:
+    - run both calibrations first, at the resolution the stream delivers;
+    - keep the camera exactly where it was when calibrate_plane ran;
+    - lay the garment flat on the calibrated table.
+At 640x480 one pixel covers about 2.7 mm of table, which limits the accuracy.
 
 How to use:
-    1. Start IP Webcam (or DroidCam) on the phone, on the same Wi-Fi as this PC.
-    2. Set CAMERA_URL below to the address the app shows.
-    3. Run:  python realtime_measure.py
+    1. Start DroidCam (or IP Webcam) on the phone, on the same Wi-Fi as this PC.
+    2. Set CAMERA_URL in src/garmentiq/calibration/config.py. The calibration and
+       this script share it, so they always use the same camera.
+    3. Calibrate once (calibration.md, sections 2 and 8).
+    4. Run:  python realtime_measure.py
 
 Keys (click the video window first):
     live view       s = capture and segment          q = quit
     review window   1 = captured image   2 = mask   3 = green background
                     ENTER = measure   r = retake   ESC = cancel
 """
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +37,9 @@ import numpy as np
 import torch
 
 import garmentiq as giq
+from garmentiq.calibration.camera import Camera
+from garmentiq.calibration.config import CAMERA_URL
+from garmentiq.calibration.metrology import PlaneMeasurer
 from garmentiq.classification.model_definition import tinyViT
 from garmentiq.segmentation.model_definition.birefnet import BiRefNet, load_birefnet_config
 from garmentiq.landmark.detection.model_definition import PoseHighResolutionNet
@@ -36,11 +50,9 @@ from garmentiq.landmark.derivation.derivation_dict import derivation_dict
 # ----------------------------------------------------------------------------
 # Settings
 # ----------------------------------------------------------------------------
-# IP Webcam: http://<phone-ip>:8080/video    DroidCam: http://<phone-ip>:4747/video
-CAMERA_URL = "http://192.168.8.170:4747/video"
-
-# Frames wider than this are scaled down before processing, to keep it fast.
-FRAME_WIDTH = 1280
+# Frames are never resized here: the calibration maps pixels of the calibrated
+# resolution to mm, so a resized frame would give wrong millimetres. The models
+# resize their own inputs internally.
 
 # Segmentation input size. It is the slowest stage.
 # (512, 512): ~0.4 s per frame on an RTX 3050, landmarks can move by ~2 px.
@@ -71,51 +83,16 @@ VIEW_ORIGINAL, VIEW_MASK, VIEW_GREEN = 0, 1, 2
 
 
 # ----------------------------------------------------------------------------
-# Step 1: Camera reader
+# Step 1: Camera frames
 # ----------------------------------------------------------------------------
-class LatestFrameReader:
-    """Reads the phone stream in a background thread and keeps only the newest frame.
+def read_undistorted(camera, measurer):
+    """Returns the newest camera frame (BGR) with lens distortion removed.
 
-    A network stream queues up frames. The pipeline is slower than the camera, so
-    reading frames in order would make the video fall further and further behind.
-    Keeping only the newest frame keeps the display live.
+    Every stage runs on this undistorted frame, so the landmark pixels it produces
+    can go straight through the table homography to mm. Raises ValueError if the
+    stream's resolution differs from the calibrated one.
     """
-
-    def __init__(self, url):
-        self.capture = cv2.VideoCapture(url)
-        if not self.capture.isOpened():
-            # DroidCam allows only one client at a time, so a browser tab or VLC
-            # still showing the stream will lock this script out.
-            raise RuntimeError(
-                f"Could not open camera stream: {url}\n"
-                f"Check that the phone app is streaming, and that no browser tab, "
-                f"VLC or DroidCam client is already connected to it."
-            )
-
-        self.frame = None
-        self.lock = threading.Lock()
-        self.running = True
-        self.thread = threading.Thread(target=self._keep_reading, daemon=True)
-        self.thread.start()
-
-    def _keep_reading(self):
-        while self.running:
-            ok, frame = self.capture.read()
-            if ok:
-                with self.lock:
-                    self.frame = frame
-            else:
-                time.sleep(0.01)  # stream hiccup: wait briefly instead of spinning the CPU
-
-    def read(self):
-        """Returns a copy of the newest frame (BGR), or None if nothing has arrived yet."""
-        with self.lock:
-            return None if self.frame is None else self.frame.copy()
-
-    def release(self):
-        self.running = False
-        self.thread.join(timeout=1.0)
-        self.capture.release()
+    return measurer.undistort(camera.read())
 
 
 # ----------------------------------------------------------------------------
@@ -145,31 +122,7 @@ def load_models():
 
 
 # ----------------------------------------------------------------------------
-# Step 3: Frame helpers
-# ----------------------------------------------------------------------------
-def resize_frame(frame_bgr):
-    """Scales the frame down to FRAME_WIDTH, keeping its aspect ratio."""
-    height, width = frame_bgr.shape[:2]
-    if width <= FRAME_WIDTH:
-        return frame_bgr
-    new_height = int(height * FRAME_WIDTH / width)
-    return cv2.resize(frame_bgr, (FRAME_WIDTH, new_height))
-
-
-def wait_for_first_frame(reader, timeout_seconds=10):
-    """Waits until the stream delivers its first frame."""
-    start = time.time()
-    frame = reader.read()
-    while frame is None:
-        if time.time() - start > timeout_seconds:
-            raise RuntimeError("No frames received. Check CAMERA_URL and the phone app.")
-        time.sleep(0.05)
-        frame = reader.read()
-    return frame
-
-
-# ----------------------------------------------------------------------------
-# Step 4: Classification (runs on every live frame)
+# Step 3: Classification (runs on every live frame)
 # ----------------------------------------------------------------------------
 def classify_garment(classifier, frame_rgb):
     label, _ = giq.classification.predict(
@@ -185,7 +138,7 @@ def classify_garment(classifier, frame_rgb):
 
 
 # ----------------------------------------------------------------------------
-# Step 5: Segmentation and the green background (key 's')
+# Step 4: Segmentation and the green background (key 's')
 # ----------------------------------------------------------------------------
 def segment_frame(frame_rgb, segmenter):
     """Returns the garment mask for one frame: (H, W) uint8, soft values 0-255."""
@@ -216,7 +169,7 @@ def make_green_background(frame_rgb, mask):
 
 
 # ----------------------------------------------------------------------------
-# Step 6: Measure the captured frame
+# Step 5: Measure the captured frame
 # ----------------------------------------------------------------------------
 def measure_frame(green_rgb, mask, label, landmark_model):
     """Runs detection -> refinement -> derivation -> distances on the green image.
@@ -265,8 +218,28 @@ def measure_frame(green_rgb, mask, label, landmark_model):
     return detection, pixel_measurements
 
 
+def measurements_in_mm(detection, label, measurer):
+    """Converts every measurement to millimetres: {measurement name: mm}.
+
+    Each measurement is a straight line between a start and an end landmark. Both
+    ends are mapped onto the table with the homography, and the distance is taken
+    there. Multiplying the pixel distance by one mm-per-pixel factor would be wrong:
+    with perspective, a pixel covers a different length in different parts of the
+    frame.
+    """
+    landmarks = detection[label]["landmarks"]
+    distances_mm = {}
+    for name, measurement in detection[label]["measurements"].items():
+        start = landmarks[measurement["landmarks"]["start"]]
+        end = landmarks[measurement["landmarks"]["end"]]
+        distances_mm[name] = measurer.distance_mm(
+            (start["x"], start["y"]), (end["x"], end["y"])
+        )
+    return distances_mm
+
+
 # ----------------------------------------------------------------------------
-# Step 7: Drawing
+# Step 6: Drawing
 # ----------------------------------------------------------------------------
 def put_text(image, text, position, color):
     """Draws text with a dark outline so it stays readable on any background."""
@@ -274,8 +247,8 @@ def put_text(image, text, position, color):
     cv2.putText(image, text, position, cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
 
-def draw_measurements(frame_bgr, detection, label, pixel_measurements):
-    """Draws measurement lines, landmark points and a list of values on the frame."""
+def draw_measurements(frame_bgr, detection, label, mm_measurements):
+    """Draws measurement lines, landmark points and a list of mm values on the frame."""
     landmarks = detection[label]["landmarks"]
     measurements = detection[label]["measurements"]
 
@@ -298,12 +271,12 @@ def draw_measurements(frame_bgr, detection, label, pixel_measurements):
 
     # Measurement values, listed in the top-left corner
     put_text(frame_bgr, f"Class: {label}", (10, 60), GREEN)
-    for row, (name, distance) in enumerate(pixel_measurements.items()):
-        put_text(frame_bgr, f"{name}: {distance:.1f} px", (10, 90 + row * 30), GREEN)
+    for row, (name, distance_mm) in enumerate(mm_measurements.items()):
+        put_text(frame_bgr, f"{name}: {distance_mm:.1f} mm", (10, 90 + row * 30), GREEN)
 
 
 # ----------------------------------------------------------------------------
-# Step 8: The review window
+# Step 7: The review window
 # ----------------------------------------------------------------------------
 def show_review(views, view_index, title, hint):
     """Draws one view of the captured frame, with its caption, into the review window."""
@@ -319,10 +292,11 @@ def review_capture(views, label, measured=False):
     views is [original BGR, mask BGR, green BGR]. Returns "measure", "retake" or
     "cancel"; after measuring, "measure" is not offered and the window just closes.
     """
+    measured_tag = "   MEASURED" if measured else ""
     titles = [
-        f"Captured image   ({label})",
+        f"Captured image   ({label}){measured_tag}",
         "Segmentation mask",
-        "Green background" + ("   MEASURED" if measured else ""),
+        f"Green background{measured_tag}",
     ]
     hint = (
         "1/2/3 = view    ENTER = close    r = retake    ESC = quit review"
@@ -330,7 +304,9 @@ def review_capture(views, label, measured=False):
         else "1/2/3 = view    ENTER = measure    r = retake    ESC = cancel"
     )
 
-    view_index = VIEW_GREEN  # the green version is what the next stage runs on
+    # Before measuring, open on the green image, since that is what gets measured.
+    # After measuring, open on the real captured photo with the measurements drawn.
+    view_index = VIEW_ORIGINAL if measured else VIEW_GREEN
     show_review(views, view_index, titles[view_index], hint)
 
     while True:
@@ -350,9 +326,9 @@ def review_capture(views, label, measured=False):
 
 
 # ----------------------------------------------------------------------------
-# Step 9: Save a snapshot (after a successful measurement)
+# Step 8: Save a snapshot (after a successful measurement)
 # ----------------------------------------------------------------------------
-def save_snapshot(frame_bgr, green_bgr, mask, detection, label):
+def save_snapshot(frame_bgr, green_bgr, mask, detection, label, mm_measurements):
     name = datetime.now().strftime("frame_%Y%m%d_%H%M%S")
     image_path = SAVE_DIR / f"{name}.png"
     green_path = SAVE_DIR / f"{name}_green.png"
@@ -365,15 +341,22 @@ def save_snapshot(frame_bgr, green_bgr, mask, detection, label):
     clean = giq.utils.clean_detection_dict(
         class_name=label, image_name=image_path.name, detection_dict=detection
     )
+
+    # clean_detection_dict keeps only the pixel "distance", so the mm value is added
+    # next to it afterwards.
+    measurements = clean[image_path.name]["measurements"]
+    for measurement_name, distance_mm in mm_measurements.items():
+        measurements[measurement_name]["distance_mm"] = round(distance_mm, 1)
+
     giq.utils.export_dict_to_json(data=clean, filename=str(json_path))
     print("Saved", image_path.name, ",", green_path.name, ",", mask_path.name,
           "and", json_path.name)
 
 
 # ----------------------------------------------------------------------------
-# Step 10: Capture, review and measure (key 's')
+# Step 9: Capture, review and measure (key 's')
 # ----------------------------------------------------------------------------
-def capture_and_measure(frame_bgr, label, segmenter, landmark_model):
+def capture_and_measure(frame_bgr, label, segmenter, landmark_model, measurer):
     """Segments the captured frame, shows it for review, then measures on confirmation.
 
     Returns True if the user asked for another capture straight away ('r').
@@ -408,16 +391,21 @@ def capture_and_measure(frame_bgr, label, segmenter, landmark_model):
         cv2.destroyWindow(REVIEW_WINDOW_NAME)
         return False
 
+    # Pixels -> millimetres, using the calibration
+    mm_measurements = measurements_in_mm(detection, label, measurer)
+
     # The landmarks are in the frame's own pixel space, so the same overlay fits
     # the captured image and the green version.
     measured_original = frame_bgr.copy()
     measured_green = green_bgr.copy()
-    draw_measurements(measured_original, detection, label, pixel_measurements)
-    draw_measurements(measured_green, detection, label, pixel_measurements)
+    draw_measurements(measured_original, detection, label, mm_measurements)
+    draw_measurements(measured_green, detection, label, mm_measurements)
 
-    for name, distance in pixel_measurements.items():
-        print(f"  {name}: {distance:.1f} px")
-    save_snapshot(measured_original, measured_green, mask, detection, label)
+    for name, distance_mm in mm_measurements.items():
+        print(f"  {name}: {distance_mm:.1f} mm  ({pixel_measurements[name]:.1f} px)")
+    save_snapshot(
+        measured_original, measured_green, mask, detection, label, mm_measurements
+    )
 
     action = review_capture([measured_original, mask_bgr, measured_green], label, measured=True)
     cv2.destroyWindow(REVIEW_WINDOW_NAME)
@@ -425,49 +413,54 @@ def capture_and_measure(frame_bgr, label, segmenter, landmark_model):
 
 
 # ----------------------------------------------------------------------------
-# Step 11: Live loop
+# Step 10: Live loop
 # ----------------------------------------------------------------------------
 def main():
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Load the calibration first: if it is missing, fail now, not after the models.
+    measurer = PlaneMeasurer()
+    print("Loaded calibration: lens + table homography at "
+          f"{measurer.image_size[0]}x{measurer.image_size[1]}")
+
     classifier, segmenter, landmark_model = load_models()
 
     print("Connecting to", CAMERA_URL, "...")
-    reader = LatestFrameReader(CAMERA_URL)
-
     try:
-        wait_for_first_frame(reader)
-        print("Running. Press 's' to capture the current frame, 'q' to quit.")
+        with Camera(CAMERA_URL) as camera:
+            print("Running. Press 's' to capture the current frame, 'q' to quit.")
 
-        while True:
-            start_time = time.perf_counter()
+            while True:
+                start_time = time.perf_counter()
 
-            frame_bgr = resize_frame(reader.read())
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)  # models expect RGB
+                frame_bgr = read_undistorted(camera, measurer)
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)  # models expect RGB
 
-            # Classification is fast, so it runs on every frame
-            label = classify_garment(classifier, frame_rgb)
+                # Classification is fast, so it runs on every frame
+                label = classify_garment(classifier, frame_rgb)
 
-            # The live view shows the class only; capturing happens on 's'
-            live_view = frame_bgr.copy()
-            fps = 1.0 / (time.perf_counter() - start_time)
-            put_text(live_view, f"FPS: {fps:.1f}", (10, 30), YELLOW)
-            put_text(live_view, f"Class: {label}", (10, 60), GREEN)
-            put_text(live_view, "s = capture   q = quit", (10, 90), YELLOW)
-            cv2.imshow(WINDOW_NAME, live_view)
+                # The live view shows the class only; capturing happens on 's'
+                live_view = frame_bgr.copy()
+                fps = 1.0 / (time.perf_counter() - start_time)
+                put_text(live_view, f"FPS: {fps:.1f}", (10, 30), YELLOW)
+                put_text(live_view, f"Class: {label}", (10, 60), GREEN)
+                put_text(live_view, "s = capture   q = quit", (10, 90), YELLOW)
+                cv2.imshow(WINDOW_NAME, live_view)
 
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                break
-            if key == ord("s"):
-                # 'r' in the review window means "capture again", so loop until
-                # the user is done with this garment.
-                while capture_and_measure(frame_bgr, label, segmenter, landmark_model):
-                    frame_bgr = resize_frame(reader.read())
-                    label = classify_garment(
-                        classifier, cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                    )
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
+                    break
+                if key == ord("s"):
+                    # 'r' in the review window means "capture again", so loop until
+                    # the user is done with this garment.
+                    while capture_and_measure(
+                        frame_bgr, label, segmenter, landmark_model, measurer
+                    ):
+                        frame_bgr = read_undistorted(camera, measurer)
+                        label = classify_garment(
+                            classifier, cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                        )
     finally:
-        reader.release()
         cv2.destroyAllWindows()
 
 

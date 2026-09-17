@@ -51,3 +51,5 @@ LENS_MAX_RMS_PX = 0.5  # lens reprojection error
 PLANE_AVERAGE_FRAMES = 10  # frames averaged before fitting the table homography
 PLANE_MAX_ERROR_MM = 0.5  # homography fit error on the board corners
 TOLERANCE_MM = 3.0  # allowed measurement error on a garment
+
+

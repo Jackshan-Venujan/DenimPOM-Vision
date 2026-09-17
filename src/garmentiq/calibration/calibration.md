@@ -426,6 +426,18 @@ points_mm = measurer.raw_to_mm(raw_landmark_points)
 scale = measurer.mm_per_pixel((320, 240))
 ```
 
+### In the real-time pipeline (`realtime_measure.py`)
+
+The live trouser pipeline uses the calibration like this:
+
+1. **Load the calibration first.** `PlaneMeasurer()` is loaded at start-up, before the models, so a missing calibration fails immediately.
+2. **Undistort every frame.** `read_undistorted()` reads the newest frame from the shared `Camera` (same `CAMERA_URL` as the calibration) and undistorts it. Classification, segmentation and landmark detection all run on this undistorted frame, so their landmark pixels can be converted to mm directly.
+3. **Frames are never resized.** H belongs to the calibrated resolution; the models resize their own inputs internally.
+4. **Convert measurements to mm.** After landmark detection, refinement and derivation, `measurements_in_mm()` takes each measurement's start and end landmark, maps **both points** onto the table with H, and measures the distance in mm. This handles perspective correctly, unlike multiplying the pixel distance by one mm-per-pixel factor. For trousers, **"full length"** runs from landmark 1 (waist left) to landmark 6 (hem left outer).
+5. **Output.**
+   - The review window and console show mm; the console also shows px.
+   - The saved `outputs/realtime/*_measurement.json` keeps `distance` (px) and adds `distance_mm` for each measurement.
+
 Rules:
 - Points must come from a frame at the **calibrated resolution** (640 x 480).
 - Use `to_mm` / `distance_mm` for points from the **undistorted** frame, and `raw_to_mm` for points from the **raw** frame.
@@ -603,7 +615,7 @@ The per-metre value assumes the error grows with length. That is true for scale 
    - fitting H from K plus a `solvePnP` pose (6 unknowns instead of 8)
    - combining several board placements
 6. **`verify_plane` per-metre metric.** It overstates random pixel noise at low resolution (section 12). A possible improvement is to estimate one scale factor from all 54 corners together.
-7. **Not yet connected to the garment pipeline.** `realtime_measure.py` and `full_pipeline.ipynb` still report pixels. Next, pass their landmark points through `PlaneMeasurer.raw_to_mm` (landmarks come from raw frames).
+7. **Only `realtime_measure.py` reports mm so far.** `full_pipeline.ipynb` still reports pixels. It works on saved photos, which would have to be taken with the calibrated camera, position and resolution, and converted with `PlaneMeasurer.raw_to_mm`.
 8. **No automatic plausibility check.** `calibrate_lens` doesn't yet warn about impossible values (for example fx in the thousands); they have to be read by eye.
 
 ---
@@ -627,3 +639,4 @@ python -m pytest test/test_calibration.py -o addopts="" -v
 ```
 
 (`-o addopts=""` skips the repository's default `--nbmake` option, which is only needed for notebooks.)
+
