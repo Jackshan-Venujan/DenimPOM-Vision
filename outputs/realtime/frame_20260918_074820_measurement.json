@@ -1,0 +1,167 @@
+{
+  "frame_20260918_074820.png": {
+    "landmarks": {
+      "1": {
+        "x": 255.0,
+        "y": 51.0,
+        "conf": 0.9648050665855408
+      },
+      "2": {
+        "x": 312.0,
+        "y": 62.0,
+        "conf": 0.8625577092170715
+      },
+      "3": {
+        "x": 375.0,
+        "y": 56.0,
+        "conf": 0.8977006673812866
+      },
+      "4": {
+        "x": 225.0,
+        "y": 179.0,
+        "conf": 0.7253595590591431
+      },
+      "5": {
+        "x": 219.0,
+        "y": 290.0,
+        "conf": 0.5905072093009949
+      },
+      "6": {
+        "x": 211.0,
+        "y": 415.0,
+        "conf": 0.8975793123245239
+      },
+      "7": {
+        "x": 263.0,
+        "y": 415.0,
+        "conf": 0.9539787769317627
+      },
+      "8": {
+        "x": 268.0,
+        "y": 290.0,
+        "conf": 0.6292086243629456
+      },
+      "9": {
+        "x": 308.0,
+        "y": 170.0,
+        "conf": 0.9349072575569153
+      },
+      "10": {
+        "x": 344.0,
+        "y": 290.0,
+        "conf": 0.6368780732154846
+      },
+      "11": {
+        "x": 345.0,
+        "y": 415.0,
+        "conf": 0.9296578168869019
+      },
+      "12": {
+        "x": 392.0,
+        "y": 423.0,
+        "conf": 0.9644712209701538
+      },
+      "13": {
+        "x": 397.0,
+        "y": 290.0,
+        "conf": 0.6448051929473877
+      },
+      "14": {
+        "x": 392.0,
+        "y": 179.0,
+        "conf": 0.7739228010177612
+      }
+    },
+    "measurements": {
+      "waist": {
+        "landmarks": {
+          "start": "1",
+          "end": "3"
+        },
+        "distance": 120.10412149464314,
+        "distance_mm": 342.5
+      },
+      "full length": {
+        "landmarks": {
+          "start": "1",
+          "end": "6"
+        },
+        "distance": 366.6496965769916,
+        "distance_mm": 1016.7
+      },
+      "full length right": {
+        "landmarks": {
+          "start": "3",
+          "end": "12"
+        },
+        "distance": 367.3935219897052,
+        "distance_mm": 1033.3
+      },
+      "front rise": {
+        "landmarks": {
+          "start": "2",
+          "end": "9"
+        },
+        "distance": 108.07404868885037,
+        "distance_mm": 312.8
+      },
+      "hips": {
+        "landmarks": {
+          "start": "4",
+          "end": "14"
+        },
+        "distance": 167.0,
+        "distance_mm": 467.2
+      },
+      "inseam left": {
+        "landmarks": {
+          "start": "9",
+          "end": "7"
+        },
+        "distance": 249.09837414162303,
+        "distance_mm": 681.9
+      },
+      "inseam right": {
+        "landmarks": {
+          "start": "9",
+          "end": "11"
+        },
+        "distance": 247.77812655680484,
+        "distance_mm": 683.3
+      },
+      "mid leg left": {
+        "landmarks": {
+          "start": "5",
+          "end": "8"
+        },
+        "distance": 49.0,
+        "distance_mm": 133.2
+      },
+      "mid leg right": {
+        "landmarks": {
+          "start": "10",
+          "end": "13"
+        },
+        "distance": 53.0,
+        "distance_mm": 147.6
+      },
+      "bottom opening left": {
+        "landmarks": {
+          "start": "6",
+          "end": "7"
+        },
+        "distance": 52.0,
+        "distance_mm": 138.8
+      },
+      "bottom opening right": {
+        "landmarks": {
+          "start": "11",
+          "end": "12"
+        },
+        "distance": 47.67598976424087,
+        "distance_mm": 130.5
+      }
+    },
+    "class": "trousers"
+  }
+}

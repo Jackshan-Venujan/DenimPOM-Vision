@@ -11,7 +11,7 @@ from pathlib import Path
 # ----------------------------------------------------------------------------
 # DroidCam stream. DroidCam allows one client at a time, so close any browser tab or
 # other script that is showing it before running a calibration script.
-CAMERA_URL = "http://192.168.8.170:4747/video"
+CAMERA_URL = "http://10.161.101.150:4747/video"
 
 # (width, height) the stream delivers. The resolution is chosen in the DroidCam app;
 # cv2 cannot change it on an HTTP stream. Every calibration is valid only at this size.

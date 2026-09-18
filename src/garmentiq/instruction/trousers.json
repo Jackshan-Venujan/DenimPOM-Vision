@@ -1,4 +1,4 @@
- {
+{
   "trousers": {
     "landmarks": {
       "1": {
@@ -25,11 +25,29 @@
         "x": 48,
         "y": 80
       },
+      "5": {
+        "predefined": true,
+        "description": "side_seam_left_mid",
+        "x": 45,
+        "y": 160
+      },
       "6": {
         "predefined": true,
         "description": "hem_left_outer",
         "x": 42,
         "y": 238
+      },
+      "7": {
+        "predefined": true,
+        "description": "hem_left_inner",
+        "x": 84,
+        "y": 240
+      },
+      "8": {
+        "predefined": true,
+        "description": "inseam_left_mid",
+        "x": 86,
+        "y": 160
       },
       "9": {
         "predefined": true,
@@ -37,9 +55,33 @@
         "x": 94,
         "y": 85
       },
+      "10": {
+        "predefined": true,
+        "description": "inseam_right_mid",
+        "x": 102,
+        "y": 160
+      },
+      "11": {
+        "predefined": true,
+        "description": "hem_right_inner",
+        "x": 104,
+        "y": 240
+      },
+      "12": {
+        "predefined": true,
+        "description"  : "hem_right_outer",
+        "x": 146,
+        "y": 238
+      },
+      "13": {
+        "predefined": true,
+        "description": "side_seam_right_mid",
+        "x": 143,
+        "y": 160
+      },
       "14": {
         "predefined": true,
-        "description": "outer_right_seam_upper",
+        "description": "side_seam_right_upper",
         "x": 140,
         "y": 80
       }
@@ -57,14 +99,21 @@
           "start": "1",
           "end": "6"
         },
-        "description": "/"
+        "description": "left outseam: waist corner to outer hem corner"
+      },
+      "full length right": {
+        "landmarks": {
+          "start": "3",
+          "end": "12"
+        },
+        "description": "right outseam: waist corner to outer hem corner"
       },
       "front rise": {
         "landmarks": {
           "start": "2",
           "end": "9"
         },
-        "description": "/"
+        "description": "crotch apex to waist center"
       },
       "hips": {
         "landmarks": {
@@ -72,6 +121,48 @@
           "end": "14"
         },
         "description": "/"
+      },
+      "inseam left": {
+        "landmarks": {
+          "start": "9",
+          "end": "7"
+        },
+        "description": "crotch to inner hem corner, left leg"
+      },
+      "inseam right": {
+        "landmarks": {
+          "start": "9",
+          "end": "11"
+        },
+        "description": "crotch to inner hem corner, right leg"
+      },
+      "mid leg left": {
+        "landmarks": {
+          "start": "5",
+          "end": "8"
+        },
+        "description": "leg width about halfway down (approximate knee), left leg"
+      },
+      "mid leg right": {
+        "landmarks": {
+          "start": "10",
+          "end": "13"
+        },
+        "description": "leg width about halfway down (approximate knee), right leg"
+      },
+      "bottom opening left": {
+        "landmarks": {
+          "start": "6",
+          "end": "7"
+        },
+        "description": "hem width, left leg / leg opening left"
+      },
+      "bottom opening right": {
+        "landmarks": {
+          "start": "11",
+          "end": "12"
+        },
+        "description": "hem width, right leg / leg opening right"
       }
     }
   }
